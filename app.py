@@ -1,4 +1,5 @@
 import streamlit as st
+from groq import Groq
 import pdfplumber
 from pdf2image import convert_from_bytes
 from PIL import Image
@@ -10,7 +11,9 @@ import re
 
 # Load API key
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = os.getenv("GROQ_API_KEY")
+
+print("API KEY LOADED:", api_key)
 
 # ---- LOAD EasyOCR MODEL ----
 @st.cache_resource
@@ -26,6 +29,25 @@ def clean_text(text):
     text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
     text = re.sub(r'[^\w\s.,;:!?()%-]', '', text)
     return text.strip()
+
+def detect_document_type(text, api_key):
+    client = Groq(api_key=api_key)
+    sample_text = text[:1000]
+    
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a legal document classifier for Indian contracts. Reply with ONLY one of these exact words: loan_agreement, rent_agreement, employment_offer, nda, insurance, credit_card, other"
+            },
+            {
+                "role": "user", 
+                "content": f"What type of legal document is this?\n\n{sample_text}"
+            }
+        ]
+    )
+    return response.choices[0].message.content.strip().lower()
 
 def extract_text_digital(pdf_file):
     text = ""
@@ -92,6 +114,10 @@ if uploaded_file is not None:
     # Clean the text
     cleaned_text = clean_text(raw_text)
 
-    # Display
-    st.subheader("Extracted Text:")
-    st.write(cleaned_text)
+    # Detect document type
+    with st.spinner("Identifying document type..."):
+        doc_type = detect_document_type(cleaned_text, api_key)
+    
+    # Display document type
+    st.subheader("Document Analysis:")
+    st.info(f"📋 Document Type: **{doc_type.replace('_', ' ').title()}**")
