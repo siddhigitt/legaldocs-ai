@@ -1,9 +1,10 @@
 import streamlit as st
 import pdfplumber
-import pytesseract
 from pdf2image import convert_from_bytes
 from PIL import Image
 from dotenv import load_dotenv
+import easyocr
+import numpy as np
 import os
 import re
 
@@ -11,17 +12,18 @@ import re
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 
-# Tell pytesseract where Tesseract is installed
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# ---- LOAD EasyOCR MODEL ----
+@st.cache_resource
+def load_ocr_model():
+    # English only for now — we'll add Hindi later
+    reader = easyocr.Reader(['en'], gpu=False)
+    return reader
 
 # ---- FUNCTIONS ----
 
 def clean_text(text):
-    # Remove extra whitespace and fix spacing
     text = re.sub(r'\s+', ' ', text)
-    # Fix words stuck together by adding space before capitals
     text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
-    # Remove special characters except basic punctuation
     text = re.sub(r'[^\w\s.,;:!?()%-]', '', text)
     return text.strip()
 
@@ -34,11 +36,20 @@ def extract_text_digital(pdf_file):
                 text += page_text + "\n"
     return text
 
-def extract_text_scanned(pdf_file):
+def extract_text_easyocr(pdf_file, reader):
     text = ""
-    images = convert_from_bytes(pdf_file.read())
+    images = convert_from_bytes(
+        pdf_file.read(),
+        poppler_path=r"C:\Program Files\poppler\Library\bin"
+    )
     for image in images:
-        text += pytesseract.image_to_string(image) + "\n"
+        # Convert PIL image to numpy array — EasyOCR needs numpy
+        image_np = np.array(image)
+        # Run OCR
+        results = reader.readtext(image_np)
+        # Extract just the text from results
+        page_text = " ".join([result[1] for result in results])
+        text += page_text + "\n"
     return text
 
 def is_scanned_pdf(pdf_file):
@@ -53,6 +64,12 @@ def is_scanned_pdf(pdf_file):
 st.title("LexScan AI 🏛️")
 st.subheader("Legal Document Risk Analyzer for Indian Contracts")
 
+# Load OCR model once
+with st.spinner("Loading OCR model... (first time takes 1-2 mins)"):
+    reader = load_ocr_model()
+
+st.success("OCR model ready!")
+
 uploaded_file = st.file_uploader("Upload your legal document", type=["pdf"])
 
 if uploaded_file is not None:
@@ -63,9 +80,10 @@ if uploaded_file is not None:
         scanned = is_scanned_pdf(uploaded_file)
 
     if scanned:
-        st.info("📷 Scanned PDF detected — using OCR")
+        st.info("📷 Scanned PDF detected — using EasyOCR")
         uploaded_file.seek(0)
-        raw_text = extract_text_scanned(uploaded_file)
+        with st.spinner("Reading document with EasyOCR..."):
+            raw_text = extract_text_easyocr(uploaded_file, reader)
     else:
         st.info("📄 Digital PDF detected — extracting text directly")
         uploaded_file.seek(0)
