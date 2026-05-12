@@ -1,5 +1,7 @@
 import streamlit as st
 from groq import Groq
+import json
+import pandas as pd
 import pdfplumber
 from pdf2image import convert_from_bytes
 from PIL import Image
@@ -13,12 +15,9 @@ import re
 load_dotenv()
 api_key = os.getenv("GROQ_API_KEY")
 
-print("API KEY LOADED:", api_key)
-
 # ---- LOAD EasyOCR MODEL ----
 @st.cache_resource
 def load_ocr_model():
-    # English only for now — we'll add Hindi later
     reader = easyocr.Reader(['en'], gpu=False)
     return reader
 
@@ -27,27 +26,8 @@ def load_ocr_model():
 def clean_text(text):
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
-    text = re.sub(r'[^\w\s.,;:!?()%-]', '', text)
+    text = re.sub(r'[^\w\s.,;:!?()%\-/+]', '', text)
     return text.strip()
-
-def detect_document_type(text, api_key):
-    client = Groq(api_key=api_key)
-    sample_text = text[:1000]
-    
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a legal document classifier for Indian contracts. Reply with ONLY one of these exact words: loan_agreement, rent_agreement, employment_offer, nda, insurance, credit_card, other"
-            },
-            {
-                "role": "user", 
-                "content": f"What type of legal document is this?\n\n{sample_text}"
-            }
-        ]
-    )
-    return response.choices[0].message.content.strip().lower()
 
 def extract_text_digital(pdf_file):
     text = ""
@@ -65,11 +45,8 @@ def extract_text_easyocr(pdf_file, reader):
         poppler_path=r"C:\Program Files\poppler\Library\bin"
     )
     for image in images:
-        # Convert PIL image to numpy array — EasyOCR needs numpy
         image_np = np.array(image)
-        # Run OCR
         results = reader.readtext(image_np)
-        # Extract just the text from results
         page_text = " ".join([result[1] for result in results])
         text += page_text + "\n"
     return text
@@ -80,6 +57,86 @@ def is_scanned_pdf(pdf_file):
             if page.extract_text():
                 return False
     return True
+
+def detect_document_type(text, api_key):
+    client = Groq(api_key=api_key)
+    sample_text = text[:1000]
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a legal document classifier for Indian contracts. Reply with ONLY one of these exact words: loan_agreement, rent_agreement, employment_offer, nda, insurance, credit_card, other"
+            },
+            {
+                "role": "user",
+                "content": f"What type of legal document is this?\n\n{sample_text}"
+            }
+        ]
+    )
+    return response.choices[0].message.content.strip().lower()
+
+def extract_clauses(text, doc_type, api_key):
+    client = Groq(api_key=api_key)
+
+    prompt = f"""You are a legal clause extractor for Indian contracts.
+
+Extract all important clauses from this {doc_type.replace('_', ' ')} document.
+
+Return ONLY a JSON object — no explanation, no markdown, no extra text.
+Just the raw JSON starting with {{ and ending with }}.
+
+Format:
+{{
+    "clauses": [
+        {{
+            "clause_name": "name of clause in snake_case",
+            "clause_text": "exact relevant text from document"
+        }}
+    ]
+}}
+
+For a loan agreement extract: interest_rate, late_penalty, prepayment, tenure, insurance, arbitration
+For a rent agreement extract: monthly_rent, security_deposit, notice_period, maintenance, lock_in_period
+For an employment offer extract: salary, notice_period, probation, non_compete, intellectual_property, termination
+For an NDA extract: confidentiality_period, scope, exceptions, penalties
+For other documents extract: whatever important terms exist
+
+Document text:
+{text[:3000]}
+
+JSON output:"""
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a legal clause extractor. You return ONLY valid JSON. Never include explanations or markdown formatting."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0.1
+    )
+
+    raw_response = response.choices[0].message.content.strip()
+
+    # Clean response — remove markdown if model added it
+    if "```json" in raw_response:
+        raw_response = raw_response.split("```json")[1].split("```")[0].strip()
+    elif "```" in raw_response:
+        raw_response = raw_response.split("```")[1].split("```")[0].strip()
+
+    # Parse JSON
+    try:
+        parsed = json.loads(raw_response)
+        return parsed.get("clauses", [])
+    except json.JSONDecodeError:
+        st.warning("Could not parse clauses — try uploading again")
+        return []
 
 # ---- UI ----
 
@@ -117,7 +174,26 @@ if uploaded_file is not None:
     # Detect document type
     with st.spinner("Identifying document type..."):
         doc_type = detect_document_type(cleaned_text, api_key)
-    
+
     # Display document type
     st.subheader("Document Analysis:")
     st.info(f"📋 Document Type: **{doc_type.replace('_', ' ').title()}**")
+
+    # Show raw text in expander
+    with st.expander("📄 View Raw Extracted Text"):
+        st.write(cleaned_text)
+
+    # Extract clauses — called only once
+    with st.spinner("Extracting clauses..."):
+        clauses = extract_clauses(cleaned_text, doc_type, api_key)
+
+    # Display clauses
+    if clauses:
+        st.subheader("📋 Extracted Clauses:")
+        df = pd.DataFrame(clauses)
+        df.columns = ["Clause Name", "Clause Text"]
+        df["Clause Name"] = df["Clause Name"].str.replace("_", " ").str.title()
+        st.dataframe(df, use_container_width=True)
+        st.success(f"Found {len(clauses)} clauses")
+    else:
+        st.warning("No clauses extracted — try a different document")
