@@ -1,6 +1,7 @@
 import streamlit as st
 from groq import Groq
 import json
+import spacy
 import pandas as pd
 import pdfplumber
 from pdf2image import convert_from_bytes
@@ -15,11 +16,15 @@ import re
 load_dotenv()
 api_key = os.getenv("GROQ_API_KEY")
 
-# ---- LOAD EasyOCR MODEL ----
+# ---- LOAD MODELS ----
 @st.cache_resource
 def load_ocr_model():
     reader = easyocr.Reader(['en'], gpu=False)
     return reader
+
+@st.cache_resource
+def load_spacy_model():
+    return spacy.load("en_core_web_sm")
 
 # ---- FUNCTIONS ----
 
@@ -124,13 +129,11 @@ JSON output:"""
 
     raw_response = response.choices[0].message.content.strip()
 
-    # Clean response — remove markdown if model added it
     if "```json" in raw_response:
         raw_response = raw_response.split("```json")[1].split("```")[0].strip()
     elif "```" in raw_response:
         raw_response = raw_response.split("```")[1].split("```")[0].strip()
 
-    # Parse JSON
     try:
         parsed = json.loads(raw_response)
         return parsed.get("clauses", [])
@@ -138,12 +141,86 @@ JSON output:"""
         st.warning("Could not parse clauses — try uploading again")
         return []
 
+def extract_entities(text, nlp):
+    from spacy.matcher import Matcher
+
+    doc = nlp(text)
+
+    entities = {
+        "money": [],
+        "dates": [],
+        "percentages": [],
+        "organizations": [],
+        "persons": []
+    }
+
+    ignore_list = [
+        "register", "lpa", "nda", "internship", "ppo", "nb",
+        "duration", "characteristics", "organization", "cum"
+    ]
+
+    # Standard NER extraction
+    for ent in doc.ents:
+        text_clean = ent.text.strip()
+
+        if len(text_clean) < 2:
+            continue
+        if text_clean.lower() in ignore_list:
+            continue
+        if "/" in text_clean or "+" in text_clean:
+            continue
+        if text_clean.isupper() and len(text_clean) > 8:
+            continue
+        # Skip if more than 3 words — real org names are short
+        if ent.label_ == "ORG" and len(text_clean.split()) > 3:
+            continue
+        # Skip common false positive phrases
+        false_org_phrases = [
+            "internship cum", "personal characteristics", "internship duration",
+            "sw development", "swdevelopment", "based ppo", "recruitment drive",
+            "school of computer", "the organization", "royal philips"
+        ]
+        if any(phrase in text_clean.lower() for phrase in false_org_phrases):
+            continue
+        # Skip billion/million — company stats not contract terms
+        if "billion" in text_clean.lower() or "million" in text_clean.lower():
+            continue
+
+        if ent.label_ == "MONEY" and text_clean not in entities["money"]:
+            entities["money"].append(text_clean)
+        elif ent.label_ == "DATE" and text_clean not in entities["dates"]:
+            entities["dates"].append(text_clean)
+        elif ent.label_ == "PERCENT" and text_clean not in entities["percentages"]:
+            entities["percentages"].append(text_clean)
+        elif ent.label_ == "ORG" and text_clean not in entities["organizations"]:
+            entities["organizations"].append(text_clean)
+        elif ent.label_ == "PERSON" and text_clean not in entities["persons"]:
+            entities["persons"].append(text_clean)
+
+    # Custom Indian currency pattern matcher
+    import re
+    indian_money_patterns = [
+        r'Rs\.?\s*[\d,]+(?:\.\d+)?(?:\s*(?:LPA|lpa|per month|/month|lakhs?|crores?))?',
+        r'₹\s*[\d,]+(?:\.\d+)?(?:\s*(?:LPA|lpa|per month|/month|lakhs?|crores?))?',
+        r'INR\s*[\d,]+(?:\.\d+)?',
+        r'[\d,]+(?:\.\d+)?\s*LPA',
+        r'[\d,]+(?:\.\d+)?\s*(?:lakhs?|crores?)',
+    ]
+
+    for pattern in indian_money_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        for match in matches:
+            match_clean = match.strip()
+            if match_clean and match_clean not in entities["money"]:
+                entities["money"].append(match_clean)
+
+    return entities
+
 # ---- UI ----
 
 st.title("LexScan AI 🏛️")
 st.subheader("Legal Document Risk Analyzer for Indian Contracts")
 
-# Load OCR model once
 with st.spinner("Loading OCR model... (first time takes 1-2 mins)"):
     reader = load_ocr_model()
 
@@ -154,7 +231,6 @@ uploaded_file = st.file_uploader("Upload your legal document", type=["pdf"])
 if uploaded_file is not None:
     st.success("File uploaded successfully!")
 
-    # Detect PDF type
     with st.spinner("Detecting PDF type..."):
         scanned = is_scanned_pdf(uploaded_file)
 
@@ -168,32 +244,64 @@ if uploaded_file is not None:
         uploaded_file.seek(0)
         raw_text = extract_text_digital(uploaded_file)
 
-    # Clean the text
     cleaned_text = clean_text(raw_text)
 
-    # Detect document type
     with st.spinner("Identifying document type..."):
         doc_type = detect_document_type(cleaned_text, api_key)
 
-    # Display document type
     st.subheader("Document Analysis:")
     st.info(f"📋 Document Type: **{doc_type.replace('_', ' ').title()}**")
 
-    # Show raw text in expander
     with st.expander("📄 View Raw Extracted Text"):
         st.write(cleaned_text)
 
-    # Extract clauses — called only once
+    # Extract entities
+    nlp = load_spacy_model()
+    entities = extract_entities(cleaned_text, nlp)
+
+    # Display entities
+    st.subheader("🔍 Key Information Found:")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Filter out billion/million — not contract terms
+        relevant_money = [m for m in entities["money"] 
+                         if "billion" not in m.lower() 
+                         and "million" not in m.lower()]
+        if relevant_money:
+            st.markdown("**💰 Money Amounts**")
+            for m in relevant_money:
+                st.write(f"• {m}")
+
+        if entities["percentages"]:
+            st.markdown("**📊 Percentages**")
+            for p in entities["percentages"]:
+                st.write(f"• {p}")
+
+    with col2:
+        if entities["dates"]:
+            st.markdown("**📅 Dates & Durations**")
+            for d in entities["dates"]:
+                st.write(f"• {d}")
+
+        if entities["organizations"]:
+            st.markdown("**🏢 Organizations**")
+            for o in entities["organizations"]:
+                st.write(f"• {o}")
+
+    st.divider()
+
     with st.spinner("Extracting clauses..."):
         clauses = extract_clauses(cleaned_text, doc_type, api_key)
 
-    # Display clauses
+    #clause display
     if clauses:
         st.subheader("📋 Extracted Clauses:")
         df = pd.DataFrame(clauses)
         df.columns = ["Clause Name", "Clause Text"]
         df["Clause Name"] = df["Clause Name"].str.replace("_", " ").str.title()
-        st.dataframe(df, use_container_width=True)
+        df.index = range(1, len(df) + 1)
+        st.table(df)
         st.success(f"Found {len(clauses)} clauses")
     else:
         st.warning("No clauses extracted — try a different document")
