@@ -107,6 +107,9 @@ For an employment offer extract: salary, notice_period, probation, non_compete, 
 For an NDA extract: confidentiality_period, scope, exceptions, penalties
 For other documents extract: whatever important terms exist
 
+Important: Extract the COMPLETE clause text including all sentences
+in that clause. Do not truncate or summarize — copy the full clause.
+
 Document text:
 {text[:3000]}
 
@@ -159,7 +162,6 @@ def extract_entities(text, nlp):
         "duration", "characteristics", "organization", "cum"
     ]
 
-    # Standard NER extraction
     for ent in doc.ents:
         text_clean = ent.text.strip()
 
@@ -171,10 +173,8 @@ def extract_entities(text, nlp):
             continue
         if text_clean.isupper() and len(text_clean) > 8:
             continue
-        # Skip if more than 3 words — real org names are short
         if ent.label_ == "ORG" and len(text_clean.split()) > 3:
             continue
-        # Skip common false positive phrases
         false_org_phrases = [
             "internship cum", "personal characteristics", "internship duration",
             "sw development", "swdevelopment", "based ppo", "recruitment drive",
@@ -182,7 +182,6 @@ def extract_entities(text, nlp):
         ]
         if any(phrase in text_clean.lower() for phrase in false_org_phrases):
             continue
-        # Skip billion/million — company stats not contract terms
         if "billion" in text_clean.lower() or "million" in text_clean.lower():
             continue
 
@@ -197,8 +196,6 @@ def extract_entities(text, nlp):
         elif ent.label_ == "PERSON" and text_clean not in entities["persons"]:
             entities["persons"].append(text_clean)
 
-    # Custom Indian currency pattern matcher
-    import re
     indian_money_patterns = [
         r'Rs\.?\s*[\d,]+(?:\.\d+)?(?:\s*(?:LPA|lpa|per month|/month|lakhs?|crores?))?',
         r'₹\s*[\d,]+(?:\.\d+)?(?:\s*(?:LPA|lpa|per month|/month|lakhs?|crores?))?',
@@ -215,6 +212,148 @@ def extract_entities(text, nlp):
                 entities["money"].append(match_clean)
 
     return entities
+
+def score_clause_risk(clause_name, clause_text, doc_type):
+    with open("baseline_rules.json", "r") as f:
+        rules = json.load(f)
+
+    if doc_type not in rules:
+        return "medium", "No specific rules for this document type"
+
+    doc_rules = rules[doc_type]
+
+    # Fuzzy clause key matching
+    clause_key = clause_name.lower().replace(" ", "_")
+
+    matched_key = None
+    if clause_key in doc_rules:
+        matched_key = clause_key
+    else:
+        for rule_key in doc_rules.keys():
+            if rule_key in clause_key or clause_key in rule_key:
+                matched_key = rule_key
+                break
+
+    if not matched_key:
+        return "medium", "No specific rules for this clause"
+
+    clause_rules = doc_rules[matched_key]
+    india_note = clause_rules.get("india_note", "")
+    clause_lower = clause_text.lower()
+
+    red_keywords = [
+        "mandatory insurance",
+        "compulsory insurance",
+        "mandatory purchase",
+        "mandatory arbitration",
+        "mandatory deduction",
+        "non refundable deposit",
+        "non-refundable deposit",
+        "unlimited liability",
+        "no upper cap",
+        "no maximum cap",
+        "no cap on penalty",
+        "no maximum limit",
+        "no maximum limit or upper cap",
+        "mandatory and bundled",
+        "shall be mandatory",
+        "insurance shall be mandatory",
+        "lender appointed arbitrator",
+        "lender shall appoint",
+        "appointed exclusively by the bank",
+        "appointed exclusively by",
+        "sole arbitrator shall be appointed",
+        "exclusively by the lender",
+        "exclusively by the bank",
+        "perpetual confidentiality",
+        "perpetual obligation",
+        "all intellectual property",
+        "assign all ip",
+        "including personal projects",
+        "outside scope of employment",
+        "no prepayment allowed",
+        "prepayment not permitted"
+    ]
+
+    green_keywords = [
+        "insurance is optional",
+        "insurance optional",
+        "may opt out",
+        "can opt out",
+        "prepayment without penalty",
+        "no prepayment charge",
+        "prepayment charge nil",
+        "neutral arbitrator",
+        "mutually appointed arbitrator",
+        "limited to work performed",
+        "limited to employment scope",
+        "refundable deposit",
+        "deposit shall be refunded",
+        "waived on request"
+    ]
+
+    for keyword in red_keywords:
+        if keyword in clause_lower:
+            return "high", india_note
+
+    for keyword in green_keywords:
+        if keyword in clause_lower:
+            return "low", india_note
+
+    numbers = re.findall(r'\d+\.?\d*', clause_text)
+
+    if numbers:
+        value = float(numbers[0])
+
+        if "interest" in clause_key:
+            if value > 18:
+                return "high", india_note
+            elif value > 12:
+                return "medium", india_note
+            else:
+                return "low", india_note
+
+        if "notice" in clause_key:
+            if value > 90:
+                return "high", india_note
+            elif value > 30:
+                return "medium", india_note
+            else:
+                return "low", india_note
+
+        if "security" in clause_key or "deposit" in clause_key:
+            if value > 3:
+                return "high", india_note
+            elif value > 2:
+                return "medium", india_note
+            else:
+                return "low", india_note
+
+        if "probation" in clause_key:
+            if value > 6:
+                return "high", india_note
+            elif value > 3:
+                return "medium", india_note
+            else:
+                return "low", india_note
+
+        if "confidentiality" in clause_key:
+            if value > 5:
+                return "high", india_note
+            elif value > 2:
+                return "medium", india_note
+            else:
+                return "low", india_note
+
+        if "prepay" in clause_key or "prepayment" in clause_key or "foreclosure" in clause_key:
+            if value > 2:
+                return "high", india_note
+            elif value > 1:
+                return "medium", india_note
+            else:
+                return "low", india_note
+
+    return "medium", india_note
 
 # ---- UI ----
 
@@ -255,18 +394,15 @@ if uploaded_file is not None:
     with st.expander("📄 View Raw Extracted Text"):
         st.write(cleaned_text)
 
-    # Extract entities
     nlp = load_spacy_model()
     entities = extract_entities(cleaned_text, nlp)
 
-    # Display entities
     st.subheader("🔍 Key Information Found:")
     col1, col2 = st.columns(2)
 
     with col1:
-        # Filter out billion/million — not contract terms
-        relevant_money = [m for m in entities["money"] 
-                         if "billion" not in m.lower() 
+        relevant_money = [m for m in entities["money"]
+                         if "billion" not in m.lower()
                          and "million" not in m.lower()]
         if relevant_money:
             st.markdown("**💰 Money Amounts**")
@@ -294,14 +430,40 @@ if uploaded_file is not None:
     with st.spinner("Extracting clauses..."):
         clauses = extract_clauses(cleaned_text, doc_type, api_key)
 
-    #clause display
     if clauses:
-        st.subheader("📋 Extracted Clauses:")
-        df = pd.DataFrame(clauses)
-        df.columns = ["Clause Name", "Clause Text"]
-        df["Clause Name"] = df["Clause Name"].str.replace("_", " ").str.title()
-        df.index = range(1, len(df) + 1)
-        st.table(df)
-        st.success(f"Found {len(clauses)} clauses")
+        st.subheader("📋 Clause Risk Analysis:")
+
+        scored_clauses = []
+        for clause in clauses:
+            risk_level, india_note = score_clause_risk(
+                clause["clause_name"],
+                clause["clause_text"],
+                doc_type
+            )
+            scored_clauses.append({
+                "clause_name": clause["clause_name"],
+                "clause_text": clause["clause_text"],
+                "risk_level": risk_level,
+                "india_note": india_note
+            })
+
+        for clause in scored_clauses:
+            if clause["risk_level"] == "high":
+                color = "🔴"
+                badge = "HIGH RISK"
+            elif clause["risk_level"] == "medium":
+                color = "🟡"
+                badge = "MEDIUM RISK"
+            else:
+                color = "🟢"
+                badge = "LOW RISK"
+
+            with st.expander(f"{color} {clause['clause_name'].replace('_', ' ').title()} — {badge}"):
+                st.write(f"**Clause Text:** {clause['clause_text']}")
+                if clause["india_note"]:
+                    st.info(f"📜 **Indian Law:** {clause['india_note']}")
+
+        st.success(f"Analyzed {len(scored_clauses)} clauses")
+
     else:
         st.warning("No clauses extracted — try a different document")

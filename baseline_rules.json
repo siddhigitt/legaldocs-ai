@@ -1,0 +1,100 @@
+{
+  "loan_agreement": {
+    "interest_rate": {
+      "green_if": "below 12%",
+      "yellow_if": "12% to 18%",
+      "red_if": "above 18%",
+      "india_note": "RBI repo rate is 6.5%. Personal loan above 24% is predatory."
+    },
+    "late_penalty": {
+      "green_if": "has upper cap mentioned",
+      "yellow_if": "fixed amount per day below Rs.200",
+      "red_if": "no upper cap mentioned or above Rs.500 per day",
+      "india_note": "RBI Fair Practices Code requires disclosure of maximum penalty exposure."
+    },
+    "prepayment": {
+      "green_if": "no charge or below 1%",
+      "yellow_if": "1% to 2%",
+      "red_if": "above 2% or not mentioned",
+      "india_note": "RBI circular mandates no prepayment penalty on floating rate loans."
+    },
+    "insurance": {
+      "green_if": "clearly optional",
+      "yellow_if": "mentioned but optionality unclear",
+      "red_if": "marked mandatory or bundled",
+      "india_note": "RBI/2020-21/63 prohibits forced bundling of insurance with loans."
+    },
+    "arbitration": {
+      "green_if": "neutral third party arbitrator",
+      "yellow_if": "arbitration mentioned but arbitrator unspecified",
+      "red_if": "lender appointed arbitrator or no arbitration clause",
+      "india_note": "One-sided arbitration clauses are challengeable under Arbitration Act 1996."
+    }
+  },
+  "rent_agreement": {
+    "monthly_rent": {
+      "green_if": "rent escalation below 5% per year",
+      "yellow_if": "rent escalation 5% to 10% per year",
+      "red_if": "rent escalation above 10% or not mentioned",
+      "india_note": "Model Tenancy Act 2021 recommends reasonable annual escalation."
+    },
+    "security_deposit": {
+      "green_if": "below 2 months rent",
+      "yellow_if": "2 to 3 months rent",
+      "red_if": "above 3 months rent",
+      "india_note": "Model Tenancy Act 2021 caps security deposit at 2 months for residential."
+    },
+    "notice_period": {
+      "green_if": "30 days or less",
+      "yellow_if": "31 to 60 days",
+      "red_if": "above 60 days or not mentioned",
+      "india_note": "Standard notice period under Model Tenancy Act is one month."
+    },
+    "lock_in_period": {
+      "green_if": "no lock in or below 6 months",
+      "yellow_if": "6 to 11 months",
+      "red_if": "12 months or above",
+      "india_note": "Long lock-in periods restrict tenant rights under Model Tenancy Act."
+    }
+  },
+  "employment_offer": {
+    "notice_period": {
+      "green_if": "below 30 days",
+      "yellow_if": "30 to 90 days",
+      "red_if": "above 90 days",
+      "india_note": "Industry standard in India is 30-90 days. Above 90 days is restrictive."
+    },
+    "non_compete": {
+      "green_if": "no non-compete clause",
+      "yellow_if": "non-compete below 6 months",
+      "red_if": "non-compete above 6 months or geographic restriction",
+      "india_note": "Section 27 Indian Contract Act makes most non-compete clauses unenforceable."
+    },
+    "probation": {
+      "green_if": "below 3 months",
+      "yellow_if": "3 to 6 months",
+      "red_if": "above 6 months",
+      "india_note": "Standard probation in India is 3-6 months."
+    },
+    "intellectual_property": {
+      "green_if": "limited to work done for employer",
+      "yellow_if": "broad but within employment scope",
+      "red_if": "assigns all IP including personal projects",
+      "india_note": "IP assignment beyond employment scope is challengeable."
+    }
+  },
+  "nda": {
+    "confidentiality_period": {
+      "green_if": "below 2 years",
+      "yellow_if": "2 to 5 years",
+      "red_if": "above 5 years or perpetual",
+      "india_note": "Perpetual NDAs are difficult to enforce under Indian Contract Act."
+    },
+    "penalties": {
+      "green_if": "reasonable fixed penalty",
+      "yellow_if": "penalty mentioned but amount unclear",
+      "red_if": "unlimited damages or no penalty cap",
+      "india_note": "Section 74 Indian Contract Act limits penalty to reasonable compensation."
+    }
+  }
+}
