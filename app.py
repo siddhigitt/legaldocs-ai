@@ -377,9 +377,63 @@ def calculate_overall_risk(scored_clauses):
 
     return score, overall_risk
 
+def generate_questions(scored_clauses, doc_type, api_key):
+    client = Groq(api_key=api_key)
+
+    risky_clauses = [
+        c for c in scored_clauses
+        if c["risk_level"] in ["high", "medium"]
+    ]
+
+    if not risky_clauses:
+        return []
+
+    clause_summary = ""
+    for clause in risky_clauses:
+        clause_summary += f"- {clause['clause_name']}: {clause['clause_text'][:200]}\n"
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a legal advisor helping Indians understand contracts. Generate specific, practical questions they should ask before signing. Return ONLY a JSON array of objects with clause_name and question fields. No markdown, no explanation."
+            },
+            {
+                "role": "user",
+                "content": f"""For this {doc_type.replace('_', ' ')} document, generate one specific question
+to ask for each risky clause before signing.
+
+Risky clauses found:
+{clause_summary}
+
+Return ONLY this JSON format:
+[
+    {{"clause_name": "clause name", "question": "specific question to ask"}}
+]
+
+JSON:"""
+            }
+        ],
+        temperature=0.3
+    )
+
+    raw_response = response.choices[0].message.content.strip()
+
+    if "```json" in raw_response:
+        raw_response = raw_response.split("```json")[1].split("```")[0].strip()
+    elif "```" in raw_response:
+        raw_response = raw_response.split("```")[1].split("```")[0].strip()
+
+    try:
+        questions = json.loads(raw_response)
+        return questions
+    except json.JSONDecodeError:
+        return []
+
 # ---- UI ----
 
-st.title("LexScan AI 🏛️")
+st.title("LegalDocs 🏛️")
 st.subheader("Legal Document Risk Analyzer for Indian Contracts")
 
 with st.spinner("Loading OCR model... (first time takes 1-2 mins)"):
@@ -505,6 +559,20 @@ if uploaded_file is not None:
                     f"**{flag['clause_name'].replace('_', ' ').title()}** — "
                     f"{flag['india_note'] if flag['india_note'] else 'Review this clause carefully'}"
                 )
+
+        st.divider()
+
+        # Generate questions
+        with st.spinner("Generating questions to ask..."):
+            questions = generate_questions(scored_clauses, doc_type, api_key)
+
+        if questions:
+            st.subheader("❓ Questions To Ask Before Signing:")
+            for i, q in enumerate(questions, 1):
+                clause_name = q.get("clause_name", "").replace("_", " ").title()
+                question = q.get("question", "")
+                st.markdown(f"**{i}. {clause_name}**")
+                st.write(f"→ {question}")
 
         st.divider()
 
