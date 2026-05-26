@@ -222,7 +222,6 @@ def score_clause_risk(clause_name, clause_text, doc_type):
 
     doc_rules = rules[doc_type]
 
-    # Fuzzy clause key matching
     clause_key = clause_name.lower().replace(" ", "_")
 
     matched_key = None
@@ -355,6 +354,29 @@ def score_clause_risk(clause_name, clause_text, doc_type):
 
     return "medium", india_note
 
+def calculate_overall_risk(scored_clauses):
+    if not scored_clauses:
+        return 100, "low"
+
+    score = 100
+
+    for clause in scored_clauses:
+        if clause["risk_level"] == "high":
+            score -= 15
+        elif clause["risk_level"] == "medium":
+            score -= 7
+
+    score = max(0, score)
+
+    if score >= 75:
+        overall_risk = "low"
+    elif score >= 50:
+        overall_risk = "medium"
+    else:
+        overall_risk = "high"
+
+    return score, overall_risk
+
 # ---- UI ----
 
 st.title("LexScan AI 🏛️")
@@ -427,12 +449,11 @@ if uploaded_file is not None:
 
     st.divider()
 
-    with st.spinner("Extracting clauses..."):
+    with st.spinner("Extracting and analyzing clauses..."):
         clauses = extract_clauses(cleaned_text, doc_type, api_key)
 
     if clauses:
-        st.subheader("📋 Clause Risk Analysis:")
-
+        # Score every clause
         scored_clauses = []
         for clause in clauses:
             risk_level, india_note = score_clause_risk(
@@ -447,6 +468,48 @@ if uploaded_file is not None:
                 "india_note": india_note
             })
 
+        # Calculate overall score
+        score, overall_risk = calculate_overall_risk(scored_clauses)
+
+        # Display risk score
+        st.subheader("⚖️ Overall Risk Assessment:")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            risk_score = 100 - score
+            st.metric("Risk Score", f"{risk_score}/100")
+
+        with col2:
+            if overall_risk == "high":
+                st.error("🔴 HIGH RISK")
+            elif overall_risk == "medium":
+                st.warning("🟡 MEDIUM RISK")
+            else:
+                st.success("🟢 LOW RISK")
+
+        with col3:
+            high_count = sum(1 for c in scored_clauses if c["risk_level"] == "high")
+            st.metric("🔴 High Risk Clauses", high_count)
+
+        st.progress(risk_score / 100)
+
+        st.divider()
+
+        # Red flags summary
+        red_flags = [c for c in scored_clauses if c["risk_level"] == "high"]
+        if red_flags:
+            st.subheader("⚠️ Red Flags Summary:")
+            for flag in red_flags:
+                st.error(
+                    f"**{flag['clause_name'].replace('_', ' ').title()}** — "
+                    f"{flag['india_note'] if flag['india_note'] else 'Review this clause carefully'}"
+                )
+
+        st.divider()
+
+        # Clause by clause analysis
+        st.subheader("📋 Clause Risk Analysis:")
         for clause in scored_clauses:
             if clause["risk_level"] == "high":
                 color = "🔴"
