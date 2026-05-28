@@ -431,6 +431,173 @@ JSON:"""
     except json.JSONDecodeError:
         return []
 
+def generate_pdf_report(doc_type, risk_score, overall_risk, scored_clauses, questions, entities):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    import io
+    from datetime import datetime
+
+    # Create PDF in memory
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=0.75*inch,
+        leftMargin=0.75*inch,
+        topMargin=0.75*inch,
+        bottomMargin=0.75*inch
+    )
+
+    styles = getSampleStyleSheet()
+
+    # Custom styles
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Title'],
+        fontSize=24,
+        textColor=colors.HexColor('#1a1a2e'),
+        spaceAfter=6
+    )
+
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=14,
+        textColor=colors.HexColor('#1a1a2e'),
+        spaceBefore=12,
+        spaceAfter=6
+    )
+
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontSize=10,
+        spaceAfter=4
+    )
+
+    small_style = ParagraphStyle(
+        'CustomSmall',
+        parent=styles['Normal'],
+        fontSize=9,
+        textColor=colors.HexColor('#666666'),
+        spaceAfter=4
+    )
+
+    elements = []
+
+    # Header
+    elements.append(Paragraph("LegalDocs AI 🏛️", title_style))
+    elements.append(Paragraph("Legal Document Risk Analysis Report", styles['Heading2']))
+    elements.append(Paragraph(f"Generated on: {datetime.now().strftime('%d %B %Y, %I:%M %p')}", small_style))
+    elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
+    elements.append(Spacer(1, 12))
+
+    # Document info
+    elements.append(Paragraph("Document Overview", heading_style))
+    elements.append(Paragraph(f"<b>Document Type:</b> {doc_type.replace('_', ' ').title()}", normal_style))
+    elements.append(Paragraph(f"<b>Risk Score:</b> {risk_score}/100", normal_style))
+    elements.append(Paragraph(f"<b>Overall Risk:</b> {overall_risk.upper()}", normal_style))
+    elements.append(Spacer(1, 12))
+
+    # Risk summary table
+    high_count = sum(1 for c in scored_clauses if c["risk_level"] == "high")
+    medium_count = sum(1 for c in scored_clauses if c["risk_level"] == "medium")
+    low_count = sum(1 for c in scored_clauses if c["risk_level"] == "low")
+
+    summary_data = [
+        ["Risk Level", "Count"],
+        ["🔴 High Risk", str(high_count)],
+        ["🟡 Medium Risk", str(medium_count)],
+        ["🟢 Low Risk", str(low_count)],
+        ["Total Clauses", str(len(scored_clauses))]
+    ]
+
+    summary_table = Table(summary_data, colWidths=[3*inch, 1.5*inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a1a2e')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor('#f5f5f5'), colors.white]),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cccccc')),
+        ('PADDING', (0, 0), (-1, -1), 8),
+    ]))
+    elements.append(summary_table)
+    elements.append(Spacer(1, 16))
+
+    # Red flags
+    red_flags = [c for c in scored_clauses if c["risk_level"] == "high"]
+    if red_flags:
+        elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
+        elements.append(Paragraph("⚠️ Red Flags", heading_style))
+        for flag in red_flags:
+            elements.append(Paragraph(
+                f"<b>{flag['clause_name'].replace('_', ' ').title()}</b> — "
+                f"{flag['india_note'] if flag['india_note'] else 'Review this clause carefully'}",
+                normal_style
+            ))
+        elements.append(Spacer(1, 12))
+
+    # Questions
+    if questions:
+        elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
+        elements.append(Paragraph("❓ Questions To Ask Before Signing", heading_style))
+        for i, q in enumerate(questions, 1):
+            clause_name = q.get("clause_name", "").replace("_", " ").title()
+            question = q.get("question", "")
+            elements.append(Paragraph(f"<b>{i}. {clause_name}</b>", normal_style))
+            elements.append(Paragraph(f"→ {question}", normal_style))
+            elements.append(Spacer(1, 4))
+        elements.append(Spacer(1, 12))
+
+    # Clause analysis
+    elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
+    elements.append(Paragraph("📋 Clause by Clause Analysis", heading_style))
+
+    clause_data = [["Clause", "Risk Level", "Indian Law Note"]]
+    for clause in scored_clauses:
+        risk_label = clause["risk_level"].upper()
+        clause_data.append([
+            clause["clause_name"].replace("_", " ").title(),
+            risk_label,
+            clause["india_note"][:80] + "..." if len(clause.get("india_note", "")) > 80 else clause.get("india_note", "N/A")
+        ])
+
+    clause_table = Table(clause_data, colWidths=[1.8*inch, 1*inch, 3.7*inch])
+    clause_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a1a2e')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor('#f5f5f5'), colors.white]),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cccccc')),
+        ('PADDING', (0, 0), (-1, -1), 6),
+        ('WORDWRAP', (0, 0), (-1, -1), True),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+    ]))
+    elements.append(clause_table)
+    elements.append(Spacer(1, 16))
+
+    # Footer
+    elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
+    elements.append(Spacer(1, 8))
+    elements.append(Paragraph(
+        "⚠️ Disclaimer: This report is generated by AI and is for informational purposes only. "
+        "It does not constitute legal advice. Please consult a qualified lawyer before making any legal decisions.",
+        small_style
+    ))
+    elements.append(Paragraph("Generated by LegalDocs AI — Legal Document Risk Analyzer for Indian Contracts", small_style))
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
 # ---- UI ----
 
 st.title("LegalDocs 🏛️")
@@ -595,6 +762,26 @@ if uploaded_file is not None:
                     st.info(f"📜 **Indian Law:** {clause['india_note']}")
 
         st.success(f"Analyzed {len(scored_clauses)} clauses")
+        # PDF Export button
+        st.divider()
+        st.subheader("📥 Export Report")
+
+        if st.button("Generate PDF Report"):
+            with st.spinner("Generating PDF report..."):
+                pdf_buffer = generate_pdf_report(
+                    doc_type,
+                    risk_score,
+                    overall_risk,
+                    scored_clauses,
+                    questions,
+                    entities
+                )
+            st.download_button(
+                label="📄 Download PDF Report",
+                data=pdf_buffer,
+                file_name=f"legalDocs_report_{doc_type}.pdf",
+                mime="application/pdf"
+            )
 
     else:
         st.warning("No clauses extracted — try a different document")
