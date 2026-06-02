@@ -11,6 +11,61 @@ import easyocr
 import numpy as np
 import os
 import re
+import sqlite3
+from datetime import datetime
+
+def init_database():
+    conn = sqlite3.connect("lexscan_history.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT,
+            doc_type TEXT,
+            risk_score INTEGER,
+            overall_risk TEXT,
+            high_risk_count INTEGER,
+            medium_risk_count INTEGER,
+            low_risk_count INTEGER,
+            timestamp TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def save_analysis(filename, doc_type, risk_score, overall_risk, scored_clauses):
+    conn = sqlite3.connect("lexscan_history.db")
+    cursor = conn.cursor()
+
+    high_count = sum(1 for c in scored_clauses if c["risk_level"] == "high")
+    medium_count = sum(1 for c in scored_clauses if c["risk_level"] == "medium")
+    low_count = sum(1 for c in scored_clauses if c["risk_level"] == "low")
+
+    cursor.execute("""
+        INSERT INTO analyses
+        (filename, doc_type, risk_score, overall_risk, high_risk_count, medium_risk_count, low_risk_count, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        filename,
+        doc_type,
+        risk_score,
+        overall_risk,
+        high_count,
+        medium_count,
+        low_count,
+        datetime.now().strftime("%d %B %Y, %I:%M %p")
+    ))
+
+    conn.commit()
+    conn.close()
+
+def get_history():
+    conn = sqlite3.connect("lexscan_history.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM analyses ORDER BY id DESC LIMIT 10")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 # Load API key
 load_dotenv()
@@ -241,54 +296,28 @@ def score_clause_risk(clause_name, clause_text, doc_type):
     clause_lower = clause_text.lower()
 
     red_keywords = [
-        "mandatory insurance",
-        "compulsory insurance",
-        "mandatory purchase",
-        "mandatory arbitration",
-        "mandatory deduction",
-        "non refundable deposit",
-        "non-refundable deposit",
-        "unlimited liability",
-        "no upper cap",
-        "no maximum cap",
-        "no cap on penalty",
-        "no maximum limit",
-        "no maximum limit or upper cap",
-        "mandatory and bundled",
-        "shall be mandatory",
-        "insurance shall be mandatory",
-        "lender appointed arbitrator",
-        "lender shall appoint",
-        "appointed exclusively by the bank",
-        "appointed exclusively by",
-        "sole arbitrator shall be appointed",
-        "exclusively by the lender",
-        "exclusively by the bank",
-        "perpetual confidentiality",
-        "perpetual obligation",
-        "all intellectual property",
-        "assign all ip",
-        "including personal projects",
-        "outside scope of employment",
-        "no prepayment allowed",
-        "prepayment not permitted"
+        "mandatory insurance", "compulsory insurance", "mandatory purchase",
+        "mandatory arbitration", "mandatory deduction", "non refundable deposit",
+        "non-refundable deposit", "unlimited liability", "no upper cap",
+        "no maximum cap", "no cap on penalty", "no maximum limit",
+        "no maximum limit or upper cap", "mandatory and bundled",
+        "shall be mandatory", "insurance shall be mandatory",
+        "lender appointed arbitrator", "lender shall appoint",
+        "appointed exclusively by the bank", "appointed exclusively by",
+        "sole arbitrator shall be appointed", "exclusively by the lender",
+        "exclusively by the bank", "perpetual confidentiality",
+        "perpetual obligation", "all intellectual property", "assign all ip",
+        "including personal projects", "outside scope of employment",
+        "no prepayment allowed", "prepayment not permitted"
     ]
 
     green_keywords = [
-        "insurance is optional",
-        "insurance optional",
-        "may opt out",
-        "can opt out",
-        "prepayment without penalty",
-        "no prepayment charge",
-        "prepayment charge nil",
-        "neutral arbitrator",
-        "mutually appointed arbitrator",
-        "limited to work performed",
-        "limited to employment scope",
-        "refundable deposit",
-        "deposit shall be refunded",
-        "waived on request"
+        "insurance is optional", "insurance optional", "may opt out",
+        "can opt out", "prepayment without penalty", "no prepayment charge",
+        "prepayment charge nil", "neutral arbitrator",
+        "mutually appointed arbitrator", "limited to work performed",
+        "limited to employment scope", "refundable deposit",
+        "deposit shall be refunded", "waived on request"
     ]
 
     for keyword in red_keywords:
@@ -441,7 +470,6 @@ def generate_pdf_report(doc_type, risk_score, overall_risk, scored_clauses, ques
     import io
     from datetime import datetime
 
-    # Create PDF in memory
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -454,7 +482,6 @@ def generate_pdf_report(doc_type, risk_score, overall_risk, scored_clauses, ques
 
     styles = getSampleStyleSheet()
 
-    # Custom styles
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Title'],
@@ -489,30 +516,27 @@ def generate_pdf_report(doc_type, risk_score, overall_risk, scored_clauses, ques
 
     elements = []
 
-    # Header
-    elements.append(Paragraph("LegalDocs AI 🏛️", title_style))
+    elements.append(Paragraph("LexScan AI 🏛️", title_style))
     elements.append(Paragraph("Legal Document Risk Analysis Report", styles['Heading2']))
     elements.append(Paragraph(f"Generated on: {datetime.now().strftime('%d %B %Y, %I:%M %p')}", small_style))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
     elements.append(Spacer(1, 12))
 
-    # Document info
     elements.append(Paragraph("Document Overview", heading_style))
     elements.append(Paragraph(f"<b>Document Type:</b> {doc_type.replace('_', ' ').title()}", normal_style))
     elements.append(Paragraph(f"<b>Risk Score:</b> {risk_score}/100", normal_style))
     elements.append(Paragraph(f"<b>Overall Risk:</b> {overall_risk.upper()}", normal_style))
     elements.append(Spacer(1, 12))
 
-    # Risk summary table
     high_count = sum(1 for c in scored_clauses if c["risk_level"] == "high")
     medium_count = sum(1 for c in scored_clauses if c["risk_level"] == "medium")
     low_count = sum(1 for c in scored_clauses if c["risk_level"] == "low")
 
     summary_data = [
         ["Risk Level", "Count"],
-        ["🔴 High Risk", str(high_count)],
-        ["🟡 Medium Risk", str(medium_count)],
-        ["🟢 Low Risk", str(low_count)],
+        ["High Risk", str(high_count)],
+        ["Medium Risk", str(medium_count)],
+        ["Low Risk", str(low_count)],
         ["Total Clauses", str(len(scored_clauses))]
     ]
 
@@ -530,11 +554,10 @@ def generate_pdf_report(doc_type, risk_score, overall_risk, scored_clauses, ques
     elements.append(summary_table)
     elements.append(Spacer(1, 16))
 
-    # Red flags
     red_flags = [c for c in scored_clauses if c["risk_level"] == "high"]
     if red_flags:
         elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
-        elements.append(Paragraph("⚠️ Red Flags", heading_style))
+        elements.append(Paragraph("Red Flags", heading_style))
         for flag in red_flags:
             elements.append(Paragraph(
                 f"<b>{flag['clause_name'].replace('_', ' ').title()}</b> — "
@@ -543,21 +566,19 @@ def generate_pdf_report(doc_type, risk_score, overall_risk, scored_clauses, ques
             ))
         elements.append(Spacer(1, 12))
 
-    # Questions
     if questions:
         elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
-        elements.append(Paragraph("❓ Questions To Ask Before Signing", heading_style))
+        elements.append(Paragraph("Questions To Ask Before Signing", heading_style))
         for i, q in enumerate(questions, 1):
             clause_name = q.get("clause_name", "").replace("_", " ").title()
             question = q.get("question", "")
             elements.append(Paragraph(f"<b>{i}. {clause_name}</b>", normal_style))
-            elements.append(Paragraph(f"→ {question}", normal_style))
+            elements.append(Paragraph(f"-> {question}", normal_style))
             elements.append(Spacer(1, 4))
         elements.append(Spacer(1, 12))
 
-    # Clause analysis
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
-    elements.append(Paragraph("📋 Clause by Clause Analysis", heading_style))
+    elements.append(Paragraph("Clause by Clause Analysis", heading_style))
 
     clause_data = [["Clause", "Risk Level", "Indian Law Note"]]
     for clause in scored_clauses:
@@ -578,21 +599,19 @@ def generate_pdf_report(doc_type, risk_score, overall_risk, scored_clauses, ques
         ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor('#f5f5f5'), colors.white]),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cccccc')),
         ('PADDING', (0, 0), (-1, -1), 6),
-        ('WORDWRAP', (0, 0), (-1, -1), True),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
     ]))
     elements.append(clause_table)
     elements.append(Spacer(1, 16))
 
-    # Footer
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#cccccc')))
     elements.append(Spacer(1, 8))
     elements.append(Paragraph(
-        "⚠️ Disclaimer: This report is generated by AI and is for informational purposes only. "
+        "Disclaimer: This report is generated by AI and is for informational purposes only. "
         "It does not constitute legal advice. Please consult a qualified lawyer before making any legal decisions.",
         small_style
     ))
-    elements.append(Paragraph("Generated by LegalDocs AI — Legal Document Risk Analyzer for Indian Contracts", small_style))
+    elements.append(Paragraph("Generated by LexScan AI — Legal Document Risk Analyzer for Indian Contracts", small_style))
 
     doc.build(elements)
     buffer.seek(0)
@@ -600,7 +619,31 @@ def generate_pdf_report(doc_type, risk_score, overall_risk, scored_clauses, ques
 
 # ---- UI ----
 
-st.title("LegalDocs 🏛️")
+init_database()
+
+# Sidebar history
+with st.sidebar:
+    st.title("📚 Analysis History")
+    history = get_history()
+
+    if history:
+        for row in history:
+            id, filename, doc_type, risk_score, overall_risk, high, medium, low, timestamp = row
+            with st.expander(f"📄 {filename[:20]}..."):
+                st.write(f"**Type:** {doc_type.replace('_', ' ').title()}")
+                st.write(f"**Risk Score:** {risk_score}/100")
+                if overall_risk == "high":
+                    st.error("🔴 HIGH RISK")
+                elif overall_risk == "medium":
+                    st.warning("🟡 MEDIUM RISK")
+                else:
+                    st.success("🟢 LOW RISK")
+                st.write(f"🔴 {high} high · 🟡 {medium} medium · 🟢 {low} low")
+                st.caption(timestamp)
+    else:
+        st.info("No analyses yet. Upload a document to get started.")
+
+st.title("LexScan AI 🏛️")
 st.subheader("Legal Document Risk Analyzer for Indian Contracts")
 
 with st.spinner("Loading OCR model... (first time takes 1-2 mins)"):
@@ -691,6 +734,16 @@ if uploaded_file is not None:
 
         # Calculate overall score
         score, overall_risk = calculate_overall_risk(scored_clauses)
+        risk_score = 100 - score
+
+        # Save to database
+        save_analysis(
+            uploaded_file.name,
+            doc_type,
+            risk_score,
+            overall_risk,
+            scored_clauses
+        )
 
         # Display risk score
         st.subheader("⚖️ Overall Risk Assessment:")
@@ -698,7 +751,6 @@ if uploaded_file is not None:
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            risk_score = 100 - score
             st.metric("Risk Score", f"{risk_score}/100")
 
         with col2:
@@ -762,7 +814,7 @@ if uploaded_file is not None:
                     st.info(f"📜 **Indian Law:** {clause['india_note']}")
 
         st.success(f"Analyzed {len(scored_clauses)} clauses")
-        # PDF Export button
+
         st.divider()
         st.subheader("📥 Export Report")
 
@@ -779,7 +831,7 @@ if uploaded_file is not None:
             st.download_button(
                 label="📄 Download PDF Report",
                 data=pdf_buffer,
-                file_name=f"legalDocs_report_{doc_type}.pdf",
+                file_name=f"lexscan_report_{doc_type}.pdf",
                 mime="application/pdf"
             )
 
