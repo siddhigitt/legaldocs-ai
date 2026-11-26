@@ -1,9 +1,23 @@
 [theme]
-base = "dark"
-primaryColor = "#c3a76d"
-backgroundColor = "#090d12"
-secondaryBackgroundColor = "#111822"
-textColor = "#e6eaf0"
+base = "light"
+primaryColor = "#5A3D9A"
+backgroundColor = "#EDEFE8"
+secondaryBackgroundColor = "#F3F4EF"
+textColor = "#1D2331"
+borderColor = "#D6DACF"
+linkColor = "#5A3D9A"
+baseRadius = "6px"
+buttonRadius = "6px"
+showWidgetBorder = true
+font = "Mukta:https://fonts.googleapis.com/css2?family=Mukta:wght@400;500;600;700&display=swap"
+headingFont = "Libre Caslon Text:https://fonts.googleapis.com/css2?family=Libre+Caslon+Text:ital,wght@0,400;0,700;1,400&display=swap"
+
+[theme.sidebar]
+backgroundColor = "#E4E7DE"
+secondaryBackgroundColor = "#F3F4EF"
 
 [server]
 maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
